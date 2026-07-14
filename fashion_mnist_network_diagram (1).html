@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fashion-MNIST Network — 784 → 128 → 64 → 10</title>
+<style>
+  :root{
+    --bg:#0a0d12;
+    --panel:#12171f;
+    --panel-border:#232c38;
+    --text:#e7edf3;
+    --text-dim:#8a97a8;
+    --amber:#f2a541;
+    --cyan:#4fb3d9;
+    --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);overflow:hidden;height:100%;}
+  #app{position:relative;width:100vw;height:100vh;}
+  canvas{display:block;position:absolute;top:0;left:0;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;}
+  canvas.dragging{cursor:grabbing;}
+
+  #header{
+    position:absolute; top:0; left:0; right:0;
+    padding:14px 20px 10px 20px;
+    background:linear-gradient(to bottom, rgba(10,13,18,0.95), rgba(10,13,18,0));
+    pointer-events:none;
+    z-index:5;
+  }
+  #header h1{
+    font-size:15px; font-weight:600; letter-spacing:0.02em; margin:0 0 3px 0; color:var(--text);
+  }
+  #header p{margin:0; font-size:12px; color:var(--text-dim); font-family:var(--mono);}
+
+  #legend{
+    position:absolute; left:20px; bottom:20px; z-index:5;
+    background:var(--panel); border:1px solid var(--panel-border); border-radius:10px;
+    padding:12px 16px; font-size:11.5px; color:var(--text-dim); font-family:var(--mono);
+    max-width:290px; line-height:1.55;
+  }
+  #legend b{color:var(--text); font-weight:600;}
+  #legend .row{display:flex; align-items:center; gap:8px; margin:3px 0;}
+  .swatch{width:10px;height:10px;border-radius:50%;flex:0 0 auto;}
+
+  #controls{
+    position:absolute; right:20px; bottom:20px; z-index:5;
+    display:flex; flex-direction:column; gap:8px; align-items:flex-end;
+  }
+  #controls button{
+    background:var(--panel); color:var(--text); border:1px solid var(--panel-border);
+    border-radius:8px; padding:8px 14px; font-family:var(--mono); font-size:12px; cursor:pointer;
+  }
+  #controls button:hover{border-color:var(--amber); color:var(--amber);}
+
+  #tooltip{
+    position:absolute; z-index:10; pointer-events:none;
+    background:#0d1117ee; border:1px solid var(--amber); border-radius:8px;
+    padding:10px 13px; font-family:var(--mono); font-size:11.5px; color:var(--text);
+    max-width:280px; display:none; line-height:1.6; box-shadow:0 8px 24px rgba(0,0,0,0.5);
+  }
+  #tooltip .t-title{color:var(--amber); font-weight:700; margin-bottom:4px; font-size:12px;}
+  #tooltip .t-dim{color:var(--text-dim);}
+  #tooltip .bar-bg{background:#1c2531; border-radius:3px; height:5px; margin-top:2px; overflow:hidden;}
+  #tooltip .bar-fill{background:var(--amber); height:100%;}
+
+  #loading{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:var(--bg); z-index:20; font-family:var(--mono); color:var(--text-dim); font-size:13px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="loading">rendering 109,184 synaptic connections…</div>
+  <canvas id="edgeLayer"></canvas>
+  <canvas id="mainCanvas"></canvas>
+
+  <div id="header">
+    <h1>Fashion-MNIST classifier — Flatten(784) → Dense(128, ReLU) → Dense(64, ReLU) → Dense(10, Softmax)</h1>
+    <p>Desktop: scroll to zoom, drag to pan, hover a node. Touch: pinch to zoom, drag to pan, tap a node.</p>
+  </div>
+
+  <div id="legend">
+    <div class="row"><b>Reading the diagram</b></div>
+    <div class="row"><span class="swatch" style="background:#2a3644"></span> low / inactive node</div>
+    <div class="row"><span class="swatch" style="background:#f2a541"></span> high activation</div>
+    <div class="row" style="margin-top:6px;">z = (Σ input·weight) + bias</div>
+    <div class="row">a = activation(z) — ReLU or Softmax</div>
+    <div class="row" style="margin-top:6px; color:#5b6675;">Weights are illustrative (He-initialized, seeded), run against a real Fashion-MNIST pixel sample — the notebook doesn't export trained weights, so this shows the exact arithmetic Keras performs, not the post-training values.</div>
+  </div>
+
+  <div id="controls">
+    <button id="resetBtn">Reset view</button>
+    <button id="zoomInBtn">Zoom in (+)</button>
+    <button id="zoomOutBtn">Zoom out (−)</button>
+  </div>
+
+  <div id="tooltip"></div>
+</div>
+
+<script>
+/* 1. DATA */
+const RAW_PIXELS = [
+[0,0,0,0,0,0,0,0,33,96,175,156,64,14,54,137,204,194,102,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,73,186,177,183,175,188,232,255,223,219,194,179,186,213,146,0,0,0,0,0,0,0],
+[0,0,0,0,0,35,163,140,150,152,150,146,175,175,173,171,156,152,148,129,156,140,0,0,0,0,0,0],
+[0,0,0,0,0,150,142,140,152,160,156,146,142,127,135,133,140,140,137,133,125,169,75,0,0,0,0,0],
+[0,0,0,0,0,54,167,146,129,142,137,137,131,148,148,133,131,131,131,125,140,140,0,0,0,0,0,0],
+[0,0,0,0,0,0,110,188,133,146,152,133,125,127,119,129,133,119,140,131,150,14,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,221,158,137,135,123,110,110,114,108,112,117,127,142,77,0,0,0,0,0,0,0],
+[0,0,0,0,0,4,0,25,158,137,125,119,119,110,117,117,110,119,127,144,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,123,156,129,112,110,102,112,100,121,117,129,114,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,125,169,127,119,106,108,104,94,121,114,129,91,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,2,0,98,171,129,112,104,114,106,102,112,104,133,64,0,4,0,0,0,0,0,0],
+[0,0,0,0,0,0,2,0,66,173,135,129,98,100,119,102,108,98,135,60,0,4,0,0,0,0,0,0],
+[0,0,0,0,0,0,2,0,56,171,135,127,100,108,117,85,106,110,135,66,0,4,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,52,150,129,110,100,91,102,94,83,104,123,66,0,4,0,0,0,0,0,0],
+[0,0,0,0,0,0,2,0,66,167,140,148,148,127,137,152,146,146,148,96,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,45,123,94,104,96,119,121,106,98,112,87,114,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,106,89,58,50,37,50,66,56,50,75,75,137,22,0,2,0,0,0,0,0],
+[0,0,0,0,0,2,0,29,148,114,106,125,89,100,133,117,131,131,131,125,112,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,100,106,114,91,137,62,102,131,89,135,112,131,108,135,37,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,146,100,108,98,144,62,106,131,87,133,104,160,117,121,68,0,0,0,0,0,0],
+[0,0,0,0,0,0,33,121,108,96,100,140,71,106,127,85,140,104,150,140,114,89,0,0,0,0,0,0],
+[0,0,0,0,0,0,62,119,112,102,110,137,75,106,144,81,144,108,117,154,117,104,18,0,0,0,0,0],
+[0,0,0,0,0,0,66,121,102,112,117,131,73,104,156,77,137,135,83,179,129,121,35,0,0,0,0,0],
+[0,0,0,0,0,0,85,127,81,125,133,119,79,100,169,83,129,175,60,163,135,146,39,0,0,0,0,0],
+[0,0,0,0,0,0,106,129,62,140,144,108,85,83,158,85,129,175,48,146,133,135,64,0,0,0,0,0],
+[0,0,0,0,0,0,117,119,79,140,152,102,89,110,137,96,150,196,83,144,135,133,77,0,0,0,0,0],
+[0,0,0,0,0,0,154,121,87,140,154,112,94,52,142,100,83,152,85,160,133,100,12,0,0,0,0,0],
+[0,0,0,0,0,0,4,0,2,0,35,4,33,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+];
+const CLASS_NAMES = ["T-shirt/top","Trouser","Pullover","Dress","Coat","Sandal","Shirt","Sneaker","Bag","Ankle boot"];
+
+/* 2. NETWORK */
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function randNormal(rng){
+  const u1 = Math.max(rng(), 1e-9), u2 = rng();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+function makeLayer(rng, nIn, nOut){
+  const scale = Math.sqrt(2 / nIn);
+  const W = new Array(nIn);
+  for (let i = 0; i < nIn; i++){
+    const row = new Float32Array(nOut);
+    for (let j = 0; j < nOut; j++) row[j] = randNormal(rng) * scale;
+    W[i] = row;
+  }
+  const b = new Float32Array(nOut);
+  return { W, b, nIn, nOut };
+}
+function relu(x){ return x > 0 ? x : 0; }
+function denseForward(input, layer, activation){
+  const { W, b, nIn, nOut } = layer;
+  const z = new Float32Array(nOut);
+  for (let j = 0; j < nOut; j++) z[j] = b[j];
+  for (let i = 0; i < nIn; i++){
+    const xi = input[i];
+    if (xi === 0) continue;
+    const row = W[i];
+    for (let j = 0; j < nOut; j++) z[j] += xi * row[j];
+  }
+  let a;
+  if (activation === "relu"){
+    a = new Float32Array(nOut);
+    for (let j = 0; j < nOut; j++) a[j] = relu(z[j]);
+  } else {
+    a = new Float32Array(nOut);
+    let max = -Infinity;
+    for (let j = 0; j < nOut; j++) if (z[j] > max) max = z[j];
+    let sum = 0;
+    for (let j = 0; j < nOut; j++){ a[j] = Math.exp(z[j] - max); sum += a[j]; }
+    for (let j = 0; j < nOut; j++) a[j] /= sum;
+  }
+  return { z, a };
+}
+function buildNetwork(seed){
+  const rng = mulberry32(seed);
+  const layer1 = makeLayer(rng, 784, 128);
+  const layer2 = makeLayer(rng, 128, 64);
+  const layer3 = makeLayer(rng, 64, 10);
+  const input = new Float32Array(784);
+  let k = 0;
+  for (let r = 0; r < 28; r++) for (let c = 0; c < 28; c++) input[k++] = RAW_PIXELS[r][c] / 255;
+  const out1 = denseForward(input, layer1, "relu");
+  const out2 = denseForward(out1.a, layer2, "relu");
+  const out3 = denseForward(out2.a, layer3, "softmax");
+  return {
+    layers: [layer1, layer2, layer3],
+    activations: [ { z: null, a: input }, out1, out2, out3 ]
+  };
+}
+const NET = buildNetwork(42);
+
+/* 3. LAYOUT */
+const WORLD_W = 3100, WORLD_H = 1500;
+const nodes = [];
+
+{
+  const spacing = 15, gridSize = 27 * spacing;
+  const x0 = 160, y0 = (WORLD_H - gridSize) / 2;
+  let k = 0;
+  for (let r = 0; r < 28; r++){
+    for (let c = 0; c < 28; c++){
+      nodes.push({ layer:0, idx:k, x:x0 + c*spacing, y:y0 + r*spacing, r:3.4,
+                   a: NET.activations[0].a[k], z:null, row:r, col:c });
+      k++;
+    }
+  }
+}
+{
+  const n = 128, x = 1150, margin = 40, spacing = (WORLD_H - margin*2) / (n-1);
+  for (let i = 0; i < n; i++){
+    nodes.push({ layer:1, idx:i, x, y: margin + i*spacing, r:4.6,
+                 a: NET.activations[1].a[i], z: NET.activations[1].z[i] });
+  }
+}
+{
+  const n = 64, x = 1850, margin = 60, spacing = (WORLD_H - margin*2) / (n-1);
+  for (let i = 0; i < n; i++){
+    nodes.push({ layer:2, idx:i, x, y: margin + i*spacing, r:6.2,
+                 a: NET.activations[2].a[i], z: NET.activations[2].z[i] });
+  }
+}
+{
+  const n = 10, x = 2650, margin = 140, spacing = (WORLD_H - margin*2) / (n-1);
+  for (let i = 0; i < n; i++){
+    nodes.push({ layer:3, idx:i, x, y: margin + i*spacing, r:11,
+                 a: NET.activations[3].a[i], z: NET.activations[3].z[i] });
+  }
+}
+
+const layerNodes = [
+  nodes.filter(n=>n.layer===0),
+  nodes.filter(n=>n.layer===1),
+  nodes.filter(n=>n.layer===2),
+  nodes.filter(n=>n.layer===3)
+];
+const predictedIdx = layerNodes[3].reduce((best,n)=> n.a > layerNodes[3][best].a ? n.idx : best, 0);
+
+/* 4. COLOR SCALE */
+function activationColor(a, maxA){
+  const t = Math.max(0, Math.min(1, maxA > 0 ? a / maxA : 0));
+  const c1 = [42,54,68], c2 = [79,179,217], c3 = [242,165,65];
+  let r,g,b;
+  if (t < 0.5){
+    const u = t/0.5;
+    r = c1[0]+(c2[0]-c1[0])*u; g = c1[1]+(c2[1]-c1[1])*u; b = c1[2]+(c2[2]-c1[2])*u;
+  } else {
+    const u = (t-0.5)/0.5;
+    r = c2[0]+(c3[0]-c2[0])*u; g = c2[1]+(c3[1]-c2[1])*u; b = c2[2]+(c3[2]-c2[2])*u;
+  }
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+const maxA1 = Math.max(...layerNodes[1].map(n=>n.a));
+const maxA2 = Math.max(...layerNodes[2].map(n=>n.a));
+const maxA3 = Math.max(...layerNodes[3].map(n=>n.a));
+
+/* 5. CANVAS SETUP */
+const edgeCanvas = document.getElementById('edgeLayer');
+const mainCanvas = document.getElementById('mainCanvas');
+const ectx = edgeCanvas.getContext('2d');
+const mctx = mainCanvas.getContext('2d');
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+function sizeCanvas(cv, ctx){
+  cv.width = window.innerWidth * dpr;
+  cv.height = window.innerHeight * dpr;
+  cv.style.width = window.innerWidth + 'px';
+  cv.style.height = window.innerHeight + 'px';
+}
+sizeCanvas(edgeCanvas, ectx);
+sizeCanvas(mainCanvas, mctx);
+
+let view = { scale: 1, x: 0, y: 0 };
+function fitView(){
+  const availW = window.innerWidth - 40, availH = window.innerHeight - 180;
+  const s = Math.min(availW / WORLD_W, availH / WORLD_H);
+  view.scale = s;
+  view.x = (window.innerWidth - WORLD_W * s) / 2;
+  view.y = 110 + (availH - WORLD_H * s) / 2;
+}
+fitView();
+
+/* 6. PRE-RENDER EDGES */
+const edgeBuffer = document.createElement('canvas');
+edgeBuffer.width = WORLD_W; edgeBuffer.height = WORLD_H;
+const ebctx = edgeBuffer.getContext('2d');
+
+function drawEdgesBetween(ctx, fromLayer, toLayer, colorAlpha){
+  ctx.beginPath();
+  for (const a of fromLayer){
+    for (const b of toLayer){
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    }
+  }
+  ctx.strokeStyle = `rgba(120,150,180,${colorAlpha})`;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+}
+
+function renderEdgeBuffer(){
+  ebctx.clearRect(0,0,WORLD_W,WORLD_H);
+  ebctx.globalCompositeOperation = 'lighter';
+  drawEdgesBetween(ebctx, layerNodes[0], layerNodes[1], 0.018);
+  drawEdgesBetween(ebctx, layerNodes[1], layerNodes[2], 0.05);
+  drawEdgesBetween(ebctx, layerNodes[2], layerNodes[3], 0.12);
+  ebctx.globalCompositeOperation = 'source-over';
+}
+
+/* 7. RENDER LOOP */
+function applyTransform(ctx){
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,ctx.canvas.width/dpr, ctx.canvas.height/dpr);
+  ctx.translate(view.x, view.y);
+  ctx.scale(view.scale, view.scale);
+}
+
+let hovered = null;
+
+function drawNodes(ctx){
+  for (const n of nodes){
+    let color;
+    if (n.layer === 0){
+      const v = n.a;
+      const g = Math.round(v*255);
+      color = `rgb(${g},${g},${g+20>255?255:g+20})`;
+    } else if (n.layer === 1) color = activationColor(n.a, maxA1);
+    else if (n.layer === 2) color = activationColor(n.a, maxA2);
+    else color = activationColor(n.a, maxA3);
+
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.r, 0, Math.PI*2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    if (n.layer === 3){
+      ctx.strokeStyle = n.idx === predictedIdx ? '#f2a541' : '#3a4656';
+      ctx.lineWidth = n.idx === predictedIdx ? 2.5 : 1;
+      ctx.stroke();
+    }
+  }
+  ctx.font = '13px monospace';
+  ctx.textBaseline = 'middle';
+  for (const n of layerNodes[3]){
+    ctx.fillStyle = n.idx === predictedIdx ? '#f2a541' : '#8a97a8';
+    ctx.fillText(`${CLASS_NAMES[n.idx]}  ${(n.a*100).toFixed(1)}%`, n.x + 18, n.y);
+  }
+  ctx.font = '15px monospace';
+  ctx.fillStyle = '#5b6675';
+  ctx.fillText('Input · 28×28 = 784', 160, 30);
+  ctx.fillText('Dense 128 · ReLU', 1150-60, 30);
+  ctx.fillText('Dense 64 · ReLU', 1850-55, 30);
+  ctx.fillText('Dense 10 · Softmax', 2650-60, 30);
+}
+
+function drawHoverEdges(ctx, n){
+  if (!n || n.layer === 0) return;
+  const prevLayer = layerNodes[n.layer - 1];
+  ctx.beginPath();
+  for (const p of prevLayer){ ctx.moveTo(p.x,p.y); ctx.lineTo(n.x,n.y); }
+  ctx.strokeStyle = 'rgba(242,165,65,0.35)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+  if (n.layer < 3){
+    const nextLayer = layerNodes[n.layer + 1];
+    ctx.beginPath();
+    for (const q of nextLayer){ ctx.moveTo(n.x,n.y); ctx.lineTo(q.x,q.y); }
+    ctx.strokeStyle = 'rgba(79,179,217,0.3)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+  }
+}
+
+function render(){
+  applyTransform(ectx);
+  ectx.drawImage(edgeBuffer, 0, 0);
+  if (hovered) drawHoverEdges(ectx, hovered);
+
+  applyTransform(mctx);
+  drawNodes(mctx);
+  if (hovered){
+    mctx.beginPath();
+    mctx.arc(hovered.x, hovered.y, hovered.r + 3, 0, Math.PI*2);
+    mctx.strokeStyle = '#ffffff';
+    mctx.lineWidth = 1.5 / view.scale;
+    mctx.stroke();
+  }
+}
+
+/* 8. INTERACTION */
+const tooltip = document.getElementById('tooltip');
+
+function worldToScreen(x,y){ return [x*view.scale+view.x, y*view.scale+view.y]; }
+function screenToWorld(x,y){ return [(x-view.x)/view.scale, (y-view.y)/view.scale]; }
+
+function findNodeAt(wx, wy){
+  let best = null, bestD = Infinity;
+  for (const n of nodes){
+    const d = (n.x-wx)**2 + (n.y-wy)**2;
+    const hitR = Math.max(n.r, 6/view.scale);
+    if (d < hitR*hitR && d < bestD){ best = n; bestD = d; }
+  }
+  return best;
+}
+
+function nodeTooltipHTML(n){
+  if (n.layer === 0){
+    return `<div class="t-title">Input pixel [row ${n.row}, col ${n.col}]</div>
+      <div>index in flattened vector: <b>${n.idx}</b></div>
+      <div class="t-dim">raw pixel value: ${Math.round(n.a*255)} / 255</div>
+      <div>normalized value x = <b>${n.a.toFixed(4)}</b></div>
+      <div class="t-dim" style="margin-top:4px;">Flatten just reshapes 28×28 → 784. No weights/bias here — it's the same numbers, one long list instead of a grid.</div>`;
+  }
+  const layerName = n.layer===1 ? 'Dense-128' : n.layer===2 ? 'Dense-64' : 'Dense-10 (output)';
+  const actName = n.layer===3 ? 'softmax' : 'ReLU';
+  const nIn = n.layer===1?784:n.layer===2?128:64;
+  let extra = '';
+  if (n.layer===3){
+    extra = `<div style="margin-top:4px;">class: <b>${CLASS_NAMES[n.idx]}</b></div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${(n.a*100).toFixed(1)}%"></div></div>
+      <div class="t-dim">probability: ${(n.a*100).toFixed(2)}%</div>`;
+  }
+  return `<div class="t-title">${layerName} — neuron ${n.idx}</div>
+    <div class="t-dim">receives ${nIn} inputs × ${nIn} weights, +1 bias</div>
+    <div>z = Σ(xᵢ·wᵢ) + b = <b>${n.z.toFixed(4)}</b></div>
+    <div>a = ${actName}(z) = <b>${n.a.toFixed(4)}</b></div>
+    ${extra}`;
+}
+
+function showTooltipFor(n, clientX, clientY){
+  hovered = n;
+  tooltip.style.display = 'block';
+  const tw = 300, vw = window.innerWidth, vh = window.innerHeight;
+  let left = clientX + 16, top = clientY + 16;
+  if (left + tw > vw) left = clientX - tw - 16;
+  if (top + 160 > vh) top = Math.max(8, vh - 220);
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = top + 'px';
+  tooltip.innerHTML = nodeTooltipHTML(n);
+  render();
+}
+function hideTooltip(){
+  if (hovered){ hovered = null; tooltip.style.display = 'none'; render(); }
+}
+
+// --- Unified pointer handling: mouse hover+drag, touch drag+tap, pinch-zoom ---
+let isDragging = false, lastX = 0, lastY = 0;
+const activePointers = new Map(); // pointerId -> {x,y}
+let dragMoved = false;
+let pinchStartDist = 0, pinchStartScale = 1, pinchMidWorld = null;
+
+function pointerDist(p1, p2){ return Math.hypot(p1.x-p2.x, p1.y-p2.y); }
+function pointerMid(p1, p2){ return { x:(p1.x+p2.x)/2, y:(p1.y+p2.y)/2 }; }
+
+mainCanvas.addEventListener('pointerdown', e=>{
+  mainCanvas.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  dragMoved = false;
+
+  if (activePointers.size === 1){
+    isDragging = true; lastX = e.clientX; lastY = e.clientY;
+    mainCanvas.classList.add('dragging');
+  } else if (activePointers.size === 2){
+    isDragging = false;
+    mainCanvas.classList.remove('dragging');
+    const pts = Array.from(activePointers.values());
+    pinchStartDist = pointerDist(pts[0], pts[1]);
+    pinchStartScale = view.scale;
+    const rect = mainCanvas.getBoundingClientRect();
+    const mid = pointerMid(pts[0], pts[1]);
+    pinchMidWorld = screenToWorld(mid.x-rect.left, mid.y-rect.top);
+  }
+});
+
+mainCanvas.addEventListener('pointermove', e=>{
+  if (!activePointers.has(e.pointerId)){
+    // pure hover (mouse, no button down)
+    if (e.pointerType === 'mouse'){
+      const rect = mainCanvas.getBoundingClientRect();
+      const [wx,wy] = screenToWorld(e.clientX-rect.left, e.clientY-rect.top);
+      const n = findNodeAt(wx,wy);
+      if (n) showTooltipFor(n, e.clientX, e.clientY);
+      else hideTooltip();
+    }
+    return;
+  }
+  activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+
+  if (activePointers.size === 2){
+    const pts = Array.from(activePointers.values());
+    const dist = pointerDist(pts[0], pts[1]);
+    const rect = mainCanvas.getBoundingClientRect();
+    const factor = dist / (pinchStartDist || dist);
+    view.scale = Math.max(0.15, Math.min(8, pinchStartScale * factor));
+    const [nsx,nsy] = worldToScreen(pinchMidWorld[0], pinchMidWorld[1]);
+    const mid = pointerMid(pts[0], pts[1]);
+    view.x += (mid.x-rect.left) - nsx;
+    view.y += (mid.y-rect.top) - nsy;
+    dragMoved = true;
+    hideTooltip();
+    render();
+    return;
+  }
+
+  if (isDragging){
+    const dx = e.clientX-lastX, dy = e.clientY-lastY;
+    if (Math.abs(dx)+Math.abs(dy) > 3) dragMoved = true;
+    view.x += dx; view.y += dy;
+    lastX = e.clientX; lastY = e.clientY;
+    if (e.pointerType === 'mouse') hideTooltip(); else render();
+  }
+});
+
+function endPointer(e){
+  const wasSingleTap = activePointers.size === 1 && !dragMoved && e.pointerType !== 'mouse';
+  const tapPos = activePointers.get(e.pointerId);
+  activePointers.delete(e.pointerId);
+  isDragging = activePointers.size > 0;
+  if (activePointers.size < 2){ pinchStartDist = 0; }
+  if (activePointers.size === 0) mainCanvas.classList.remove('dragging');
+
+  if (wasSingleTap && tapPos){
+    const rect = mainCanvas.getBoundingClientRect();
+    const [wx,wy] = screenToWorld(tapPos.x-rect.left, tapPos.y-rect.top);
+    const n = findNodeAt(wx,wy);
+    if (n) showTooltipFor(n, tapPos.x, tapPos.y);
+    else hideTooltip();
+  }
+}
+mainCanvas.addEventListener('pointerup', endPointer);
+mainCanvas.addEventListener('pointercancel', endPointer);
+
+mainCanvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const rect = mainCanvas.getBoundingClientRect();
+  const mx = e.clientX-rect.left, my = e.clientY-rect.top;
+  const [wx,wy] = screenToWorld(mx,my);
+  const factor = Math.pow(1.0015, -e.deltaY);
+  view.scale = Math.max(0.15, Math.min(8, view.scale*factor));
+  const [nsx,nsy] = worldToScreen(wx,wy);
+  view.x += mx-nsx; view.y += my-nsy;
+  hideTooltip();
+  render();
+}, { passive:false });
+
+function zoomBy(factor){
+  const cx = window.innerWidth/2, cy = window.innerHeight/2;
+  const [wx,wy] = screenToWorld(cx,cy);
+  view.scale = Math.max(0.15, Math.min(8, view.scale*factor));
+  const [nsx,nsy] = worldToScreen(wx,wy);
+  view.x += cx-nsx; view.y += cy-nsy;
+  render();
+}
+document.getElementById('zoomInBtn').onclick = ()=>zoomBy(1.3);
+document.getElementById('zoomOutBtn').onclick = ()=>zoomBy(1/1.3);
+document.getElementById('resetBtn').onclick = ()=>{ fitView(); render(); };
+
+window.addEventListener('resize', ()=>{
+  sizeCanvas(edgeCanvas, ectx); sizeCanvas(mainCanvas, mctx);
+  fitView(); render();
+});
+
+/* 9. BOOT */
+requestAnimationFrame(()=>{
+  renderEdgeBuffer();
+  render();
+  document.getElementById('loading').style.display = 'none';
+});
+</script>
+</body>
+</html>
